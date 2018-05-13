@@ -236,7 +236,7 @@ class HvacMeter(object):
 
     def calc_ahu_returned_power(self, ahu):
         daf = self.get_ahu_disch_airflow(ahu)
-        ahu_points = hvacmeter.get_ahu_points(ahu)
+        ahu_points = self..get_ahu_points(ahu)
         rat = self.get_point_data(ahu_points['?rat'])
         mat = self.get_point_data(ahu_points['?mat'])
         power = daf.multiply(rat - mat)
@@ -244,7 +244,7 @@ class HvacMeter(object):
 
     def calc_ahu_cooling_power(self, ahu):
         daf = self.get_ahu_disch_airflow(ahu)
-        ahu_points = hvacmeter.get_ahu_points(ahu)
+        ahu_points = self.get_ahu_points(ahu)
         dat = self.get_point_data(ahu_points['?dat'])
         mat = self.get_point_data(ahu_points['?mat'])
         power = daf.multiply(mat - dat)
