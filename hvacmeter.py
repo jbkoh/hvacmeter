@@ -38,13 +38,9 @@ class HvacMeter(object):
 
     """
     def __init__(self, target_building, brick_endpoint):
-        self.cooling_params = {
-            'c1': 0.5,
-            'c2': 0.5,
-            'c3': 0.5
-        }
         self.brick = brick_endpoint
         self.target_building = target_building
+        #ttlfile = '../../../repo/hvacmeter/metadata/ebu3b_brick.ttl'
         ttlfile = '/home/jbkoh/repo/hvacmeter/metadata/ebu3b_brick.ttl'
         self.brick.load_ttlfile(ttlfile)
         self.begin_time = arrow.get(2018, 4, 6).datetime
@@ -58,43 +54,22 @@ class HvacMeter(object):
                                         freq='5min')
         self.df = pd.DataFrame(index=self.datetimes)
         self.base_ts = [arrow.get(dt).timestamp for dt in self.datetimes]
+        self._init_model_params()
+
+    def _init_model_params(self):
+        self._init_cooling_params()
+
+    def _init_cooling_params():
         self.df['Q_ahu_cooling_power'] = None
         self.df['Q_vav_cooling_power'] = None
         self.df['Q_ahu_returned_power'] = None
         self.df['water_thermal_power'] = None
         self.df['C3'] = 1
 
-    def _init_model_params(self):
-        self._init_cooling_params()
-
-    def get_ahu_vav_map(self):
-        pass
-
-    def get_all_triples(self):
-        """ this is a test code """
-        qstr = """
-        select ?s where {?s ?p ?o.}
-        """
-        res = self.brick.query(qstr)
-        print(res)
-
-
     def get_ahus(self):
         qstr = 'select ?ahu where {?ahu a/rdf:subClassOf* brick:AHU.}'
         self.ahus = [row[0] for row in self.brick.query(qstr)[1]]
         return self.ahus
-
-    def get_ahu_supply_fans(self, ahu):
-        qstr = """
-        select ?sf ?sf_flow where {{
-            ?sf bf:isPartOf <{0}>.
-            ?sf a brick:Supply_Fan .
-            ?sf_t a brick:Supply_Fan_Air_Flow_Sensor.
-            ?sf_t bf:isPointOf ?sf.
-        }}
-        """.format(ahu)
-        res = self.brick.query(qstr)
-
 
     def get_ahu_points(self, ahu):
         qstr = """
@@ -162,48 +137,6 @@ class HvacMeter(object):
         """.format(ahu)
         res = self.brick.query(qstr)
 
-    def get_all_points(self):
-#        qstr = """
-#        select ?ahu ?vav ?zone ?cc ?saf ?znt
-#            ?ahu_srcid ?vav_srcid ?zone_srcid ?cc_srcid ?saf_srcid ?znt_srcid
-#        where {
-#            ?ahu a/rdfs:subClassOf* brick:AHU .
-#            ?vav a/rdfs:subClassOf* brick:VAV .
-#            ?ahu bf:feeds+ ?vav .
-#            ?vav bf:feeds+ ?zone .
-#            ?zone a/rdfs:subClassOf* brick:HVAC_Zone .
-#            ?vav bf:hasPoint ?znt .
-#            ?znt a/rdfs:subClassOf brick:Zone_Temperature_Sensor .
-#            ?cc a/rdfs:subClassOf brick:Cooling_Command .
-#            ?vav bf:hasPoint ?cc.
-#            ?saf a/rdfs:subClassOf brick:Supply_Air_Flow_Sensor .
-#            ?vav bf:hasPoint ?saf.
-#        }
-#        """
-        #select ?ahu ?vav ?zone ?znt ?cc where {
-        qstr = """
-        select ?vav ?zone ?znt ?cc where {
-            #?ahu a/rdfs:subClassOf* brick:AHU .
-            #?ahu bf:feeds ?vav .
-            #?vav a/rdfs:subClassOf* brick:VAV . # This should work...
-            ?vav a brick:VAV .
-            ?vav bf:feeds+ ?zone .
-            #?zone a/rdfs:subClassOf* brick:HVAC_Zone .
-            ?zone a brick:HVAC_Zone .
-            ?znt bf:isPointOf ?vav .
-            ?znt a brick:Zone_Temperature_Sensor .
-            #?znt bf:srcid ?znt_srcid.
-            ?cc bf:isPointOf ?vav .
-            ?cc a brick:Cooling_Command .
-            #?cc a/rdfs:subClassOf brick:Cooling_Command .
-            #?saf a/rdfs:subClassOf brick:Supply_Air_Flow_Sensor .
-            #?saf a brick:Supply_Air_Flow_Sensor .
-            #?saf bf:isPointOf ?vav .
-
-        }
-        """
-        res = self.brick.query(qstr)
-
     def get_ahu_disch_airflow(self, ahu):
         qstr = """
         select ?daf where {{
@@ -249,21 +182,20 @@ class HvacMeter(object):
         mat = self.get_point_data(ahu_points['?mat'])
         power = daf.multiply(mat - dat)
         self.df['Q_ahu_cooling_power'] = power
-
-    def calc_vavs_cooling_power(self, vavs):
-        powers = [self.calc_vav_cooling_power(vav) for vav in vavs]
-        powers_sum = sum([power for power in powers
-                         if isinstance(power, pd.Series)])
-        # TODO: compensate not found datasets with averages.
+        
+    def calc_vavs_cooling_power(self, ahu): #TODO: Test if this is working.
+        point_sets = self.get_vavs_points(ahu)
+        powers = [self.calc_vav_cooling_power(points) for points in point_sets.values()]
+        none_cnt = sum([not isinstance(power, pd.Series) for power in powers])
+        powers_sum = sum([power for power in powers if isinstance(power, pd.Series)]) * len(powers) / (len(powers) - none_cnt)
         self.df['Q_vav_cooling_power'] = powers_sum
-
-    def calc_vav_cooling_power(self, vav):
-        points = self.get_vav_points(vav)
-        if not points:
+    
+    def calc_vav_cooling_power(self, vav_points):
+        if not vav_points:
             return None
-        znts = self.get_point_data(points['?znt'])
-        dats = self.get_point_data(points['?dat'])
-        safs = self.get_point_data(points['?saf'])
+        znts = self.get_point_data(vav_points['?znt'])
+        dats = self.get_point_data(vav_points['?dat'])
+        safs = self.get_point_data(vav_points['?saf'])
         if False not in map(series_checker, [znts, dats, safs]):
             res = safs.multiply(znts-dats)
             return res
@@ -280,6 +212,47 @@ class HvacMeter(object):
         res = self.brick.query(qstr)
         vavs = [row[0] for row in res[1]]
         return vavs
+        
+    def get_vavs_points(self, ahu):
+        qstr = """
+        select ?vav ?znt ?saf ?dat ?sat ?zone where {{
+            ?dat bf:isPointOf <{0}>.
+            ?dat a brick:Discharge_Air_Temperature_Setpoint .
+            
+            <{0}> bf:feeds ?vav .
+            ?vav a brick:VAV .
+            
+            ?vav bf:feeds ?zone .
+            ?zone a brick:HVAC_Zone .
+
+            ?znt bf:isPointOf ?vav .
+            ?znt a brick:Zone_Temperature_Sensor .
+
+            ?saf bf:isPointOf ?vav .
+            ?saf a brick:Supply_Air_Flow_Sensor .
+
+            OPTIONAL{{
+                ?sat a brick:Supply_Air_Temperature_Sensor .
+                ?sat bf:isPointOf ?vav .
+            }}
+        }}
+        """.format(ahu)
+        res = self.brick.query(qstr)
+        var_names = res[0]
+        point_sets = {} # key: vav, value: points
+        for row in res[1]:
+            points = {
+                '?znt': row[var_names.index('?znt')],
+                '?saf': row[var_names.index('?saf')],
+                '?dat': row[var_names.index('?sat')] if row[var_names.index('?sat')] else \
+                        row[var_names.index('?dat')],
+                '?zone': row[var_names.index('?zone')]
+            }
+            vav = row[var_names.index('?vav')]
+            if vav in point_sets:
+                print('VAV should not occur twise')
+            point_sets[vav] = points
+        return point_sets
 
     def get_vav_points(self, vav):
         qstr = """
@@ -376,5 +349,5 @@ if __name__ == '__main__':
     #hvacmeter.calc_ahu_cooling_power(ahu)
     hvacmeter.calc_ahu_returned_power(ahu)
     vavs = hvacmeter.get_vavs(ahu)
-    hvacmeter.calc_vavs_cooling_power(vavs)
+    hvacmeter.calc_vavs_cooling_power(ahu)
     hvacmeter.fit_coefficients()
